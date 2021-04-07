@@ -1,0 +1,159 @@
+/*
+ * Stiffness modeling for a 3 link manipulator.
+ * 
+ * Stanislav Mikhel, 2021
+ */
+batchload("elasto.mac")$
+
+/* Robot parameters */
+/*       m           m           m      N/rad */
+d1 : 0.324$  a1 : 0.25$  b1 : 0.16$  k1 : 2E5$
+d2 : 1.075$  a2 : 0.21$  b2 : 0.16$  k2 : 3E5$
+d3 : 1.5  $  a3 : 0.14$  b3 : 0.10$  k3 : 1E5$ 
+
+/* Kinematics */
+rbt : [Rz(q1),Tz(d1), Tx,Ty,Tz,Rx,Ry,Rz,  /* link 1 */
+       Ry(q2),Tx(d2), Tx,Ty,Tz,Rx,Ry,Rz,  /* link 2 */
+       Ry(q3),Tx(d3), Tx,Ty,Tz,Rx,Ry,Rz,  /* link 3 */
+       Txyz(0,0.01,0.01)]$                  /* tool */
+       
+/* Compliance */
+klst : [
+invert(Krot( Kbeam(d1,a1,b1,"circ"), Ry(-%pi/2) )), /* link 1, rotate to Z */
+invert(Kbeam(d2,a2,b2,"circ")),           /* link 2 */
+invert(Kbeam(d3,a3,b3,"circ")),           /* link 3 */
+1/k1, 1/k2, 1/k3]$                        /* joints */
+
+kjnt : Diag(klst)$   /* to matrix */
+
+/* range, q1 will be added later */
+rng : [[q2,-%pi,%pi],[q3,-%pi,%pi]]$
+
+disp("Find Jacobian columns")$
+[Jacj, Jacl] : Jac(rbt, [q1,q2,q3])$ 
+Jacj : trigsimp(expand(Jacj))$
+Jacl : trigsimp(expand(Jacl))$
+/* to function */
+define(Jfull(q1,q2,q3), transpose( apply(matrix, append(Jacl, Jacj))))$
+/* number of link columns */
+nl : length(Jacl)$
+/* Force, N */
+w : 100$
+
+/******** Algebraic approach ********/
+
+/****** 1st version ********/
+disp("First method")$
+disp("Find JJ and JL")$
+JJ : GetJJ(Jacj)$ 
+JL : GetJL(Jacj, Jacl)$ 
+
+disp("Integrate")$
+/* symmetry for q1 */
+JJ : ev(JJ, q1 : 0)$
+JL : ev(JL, q1 : 0)$
+
+JJ : float(IntegrateMat(JJ, rng))$
+JL : float(IntegrateMat(JL, rng))$
+
+disp("Matrix of coefficients")$
+Mcomp : invert(JJ) . JL$ 
+
+disp("Compliance (1st algebraic)")$
+/* to vector */
+delta : Mcomp . addrow(Vec66(klst[1]), Vec66(klst[2]), Vec66(klst[3]))$ 
+k_alg : float(transpose([klst[4],klst[5],klst[6]]) + delta)$ 
+1 / k_alg;
+
+
+disp("Second method")$
+disp("Find b's")$
+ps : GetStates(rbt, [q1,q2,q3])$ 
+ps : ev(ps, q1 : 0)$ 
+disp("Find JJ and JL")$
+[JL,JJ] : FindJMat(rbt, ps)$
+
+JJ : float(IntegrateMat(JJ, rng))$
+JL : float(IntegrateMat(JL, rng))$
+
+disp("Matrix of coefficients")$
+Mcomp : invert(JJ) . JL$ 
+
+disp("Compliance (2n algebraic)")$
+delta : Mcomp . addrow(Vec66(klst[1]), Vec66(klst[2]), Vec66(klst[3]))$ 
+k_alg : float(transpose([klst[4],klst[5],klst[6]]) + delta)$ 
+1 / k_alg;
+
+/******** Experimetal approach **********/
+/* update range */
+rng : cons([q1,-%pi,%pi], rng)$
+/* number of experiments */ 
+N : 100$  
+/* accumulators */
+S1 : 0$  S2 : 0$ 
+
+/* run */
+disp("Experimetal approach")$
+for i : 1 thru N do (
+  /* random configuration and force */
+  J : apply(Jfull, RandState(rng)),
+  W : RandForce(w),  
+  /* deflection */
+  dt : float(J . (kjnt . (transpose(J) . W))),  
+  A : float(addcol(
+    (col(J,nl+1) * (transpose(col(J,nl+1)) . W)), 
+    (col(J,nl+2) * (transpose(col(J,nl+2)) . W)),
+    (col(J,nl+3) * (transpose(col(J,nl+3)) . W))
+  )), 
+  At : transpose(A),
+  S1 : S1 + At . A,
+  S2 : S2 + At . dt  
+)$
+
+disp("Compliance (experimental)")$
+k_exp : invert(S1) . S2$
+1 / k_exp;
+
+/********* Error estimation *******/
+
+N : 30$
+e_expl : []$  e_algl : []$ 
+/* to diagonal matrices */
+kk_alg : Diag(transpose(k_alg)[1])$
+kk_exp : Diag(transpose(k_exp)[1])$
+
+/* run */
+disp("Estimate errors")$
+for i : 1 thru N do (
+  /* random configuration and force */
+  J : apply(Jfull, RandState(rng)),
+  W : RandForce(w), 
+  /* expected deflection */
+  dt0 : float(J . (kjnt . (transpose(J) . W))),
+  Jq : addcol(col(J,nl+1),col(J,nl+2),col(J,nl+3)), 
+  
+  /* algebraic approach */
+  dt : (Jq. (kk_alg . (transpose(Jq) . W))),
+  dt : dt - dt0,
+  vv : float(sqrt(transpose(dt) . dt)),
+  e_algl : cons(vv, e_algl),
+
+  /* experimental approach */   
+  dt : float(Jq. (kk_exp . (transpose(Jq) . W))),
+  dt : dt - dt0,
+  vv : sqrt(transpose(dt) . dt),
+  e_expl : cons(vv, e_expl)  
+)$
+
+/* average errors */
+disp("Algebraic approach")$
+e_alg : lreduce("+", e_algl) / length(e_algl); 
+disp("Experimental approach")$
+e_exp : lreduce("+", e_expl) / length(e_expl); 
+
+
+
+
+
+
+

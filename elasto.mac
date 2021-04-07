@@ -1,0 +1,358 @@
+/*
+ * Methods for a manipulator stiffness analysis. 
+ *
+ * Stanislav Mikhel, 2021
+ */
+
+/* Rotation */
+Rx(q) := matrix([1,0,0,0],[0,cos(q),-sin(q),0],[0,sin(q),cos(q),0],[0,0,0,1])$
+Ry(q) := matrix([cos(q),0,sin(q),0],[0,1,0,0],[-sin(q),0,cos(q),0],[0,0,0,1])$
+Rz(q) := matrix([cos(q),-sin(q),0,0],[sin(q),cos(q),0,0],[0,0,1,0],[0,0,0,1])$
+
+/* Translation */
+Tx(q) := matrix([1,0,0,q],[0,1,0,0],[0,0,1,0],[0,0,0,1])$
+Ty(q) := matrix([1,0,0,0],[0,1,0,q],[0,0,1,0],[0,0,0,1])$
+Tz(q) := matrix([1,0,0,0],[0,1,0,0],[0,0,1,q],[0,0,0,1])$
+Txyz(a,b,c) := matrix([1,0,0,a],[0,1,0,b],[0,0,1,c],[0,0,0,1])$
+f_trans : [Rx, Ry, Rz, Tx, Ty, Tz, Txyz]$
+
+/* Extract 3 row elements of matrix */
+Row(m,i) := [m[i][1],m[i][2],m[i][3]]$
+
+/* Find translational part Jacobian column */
+Jcol3(m,fn) := block(
+  if     is(fn=Rx) then 
+    m[2][4]*Row(m,3)-m[3][4]*Row(m,2)
+  elseif is(fn=Ry) then
+    m[3][4]*Row(m,1)-m[1][4]*Row(m,3)
+  elseif is(fn=Rz) then
+    m[1][4]*Row(m,2)-m[2][4]*Row(m,1)
+  elseif is(fn=Tx) then
+    Row(m,1)
+  elseif is(fn=Ty) then
+    Row(m,2)
+  else /* is(fn=Tz) */ 
+    Row(m,3)
+)$
+
+/* Find full Jacobian column */
+Jcol6(m,fn) := block(
+  if     is(fn=Rx) then 
+    append( m[2][4]*Row(m,3)-m[3][4]*Row(m,2), Row(m,1) )
+  elseif is(fn=Ry) then
+    append( m[3][4]*Row(m,1)-m[1][4]*Row(m,3), Row(m,2) )
+  elseif is(fn=Rz) then
+    append( m[1][4]*Row(m,2)-m[2][4]*Row(m,1), Row(m,3) )
+  elseif is(fn=Tx) then
+    append( Row(m,1), [0,0,0] )
+  elseif is(fn=Ty) then
+    append( Row(m,2), [0,0,0] )
+  else /* is(fn=Tz) */ 
+    append( Row(m,3), [0,0,0] )
+)$
+
+/* Copy rotational part */
+CpyRot(src,dst) := block(
+  for i : 1 thru 3 do (
+    for j : 1 thru 3 do dst[i][j] : src[i][j]
+  ), 
+  dst
+)$
+
+/* Find and sort columns of Jacobian */
+Jac(lst,var) := block (
+  [ H : ident(4), Jj : [], Jl : [], 
+   fn : Jcol3 ],  /* use position only */
+  /* collect transformations */
+  for m in lst do (
+    if not member(m, f_trans) then 
+      H : expand(H . m)
+  ),
+  /* prepare for backward motion */  
+  H : CpyRot(transpose(H), ident(4)),
+  /* calc */
+  for v in reverse(lst) do (
+    if member(v, f_trans) then 
+      /* virtual joint */
+      Jl : cons(fn(H,v), Jl) 
+    else (
+      if not lfreeof(var,v) then (
+        Jj : cons(fn(H, FindType(v)), Jj)
+      ),
+      H : v . H
+    )
+  ),
+  [ Jj, Jl ] 
+)$
+
+/* Check joint type */
+FindType(v) := block(
+  /* translation */
+  if     is(v[1][4]#0) then Tx
+  elseif is(v[2][4]#0) then Ty
+  elseif is(v[3][4]#0) then Tz
+  /* rotation */
+  elseif is(v[1][1]=1) then Rx
+  elseif is(v[2][2]=1) then Ry
+  else/* is(v[3][3]=1) */   Rz
+)$
+
+/* For each joint find positional part, index, type of transformation and virtuality */
+GetStates(lst,var) := block(
+  [ H : ident(4), Hacc : [], ps : [], h,
+    i : length(lst) ],
+  /* collect transformations */
+  for m in lst do (
+    if not member(m, f_trans) then (
+      Hacc : cons(transpose(H), Hacc),
+      H : expand(H . m)
+    )
+  ), 
+  H : CpyRot(transpose(H), ident(4)),
+  /* collect positional parts */
+  for v in reverse(lst) do (
+    h : expand([H[1][4],H[2][4],H[3][4]]),
+    if member(v, f_trans) then 
+      /* save coordinates, index, type of transformation and virtuality*/
+      ps : cons([h[1],h[2],h[3], i, v, false], ps)
+    else (
+      if not lfreeof(var,v) then 
+        ps : cons([h[1],h[2],h[3], i, FindType(v), true], ps), 
+      H : v . H,
+      H : CpyRot(first(Hacc), H), /* "simplify" product */ 
+      Hacc : rest(Hacc)
+    ), 
+    i : i - 1
+  ),
+  ps
+)$
+
+/* Find matrices Mjj and Mjl */
+FindJMat(lst,ps) := block(
+  [ M : [], acc, i, vacc, k,
+    JL : matrix(), JJ : matrix() ],
+  /* prepare matrix of scalar products */
+  for p in ps do (
+    /* find real joint */
+    if p[6] then (
+      acc : [],
+      for u in ps do 
+        acc : endcons(expand(JacProd(u,p,lst)), acc),
+      M : endcons(acc, M)
+    )
+  ),
+  /* find total products */
+  for r in M do (
+    i : 1, acc : [], vacc : [],
+    while i <= length(r) do (
+      if ps[i][6] then (
+        /* real */
+        acc : endcons( expand(r[i]*r[i]), acc),
+        i : i + 1
+      ) else (  
+        /* virtual */
+        for m : 0 thru 5 do (
+          for n : m thru 5 do (
+            k : expand(r[i+m] * r[i+n]),
+            if is(m#n) then k : k * 2, /* assume symmetrical stiffness */
+            vacc : endcons(k, vacc)
+          )
+        ),
+        i : i + 6
+      )
+    ),
+    /* save to matrix */
+    JJ : addrow(JJ, acc),
+    JL : addrow(JL, vacc)
+  ),
+  [JL,JJ]
+)$
+
+/* Find index of the element */
+_ind(f,lst,i) := if emptyp(lst) then i else 
+                   (if is(f=first(lst)) then i else _ind(f,rest(lst),i+1) )$
+Ind(f) := _ind(f,f_trans,1)$
+
+/* Find rotation matrix between the two joints */
+FindRot(v1,v2,lst) := block(
+  [ H : ident(4), i : v1[4]+1 ],
+  while i <= v2[4] do (
+    if not member(lst[i], f_trans) then 
+      H : H . lst[i],
+    i : i + 1
+  ),
+  expand(transpose(H)) 
+)$
+
+/* Simplified product or two jacobian columns */
+JacProd(v1,v2,lst) := block(
+  [ i, j, M, tmp, R ],
+  if is(v1[4] > v2[4]) then (
+    /* swap */
+    tmp : v2, v2 : v1, v1 : tmp
+  ),
+  /* rotation matrix */
+  R : FindRot(v1,v2,lst),
+  /* check types */
+  i : Ind(v1[5]), j : Ind(v2[5]), 
+  if is(j <= 3) and is(i <= 3) then (
+    /* rotation */
+    M : CpyRot(R, zeromatrix(3,3)), 
+    /* column */
+    M[1][j] : v1[1], M[2][j] : v1[2], M[3][j] : v1[3],
+    /* row */ 
+    M[i][1] : v2[1], M[i][2] : v2[2], M[i][3] : v2[3],
+    /* only translation */
+    M[i][j] : 0,
+    -determinant(M)
+  ) elseif is(j > 3) then ( /* rotation / translation */
+    /* translation */
+    j : j - 3,
+    if     is(i=1) then 
+      v1[2]*R[3][j]-v1[3]*R[2][j] 
+    elseif is(i=2) then 
+      v1[3]*R[1][j]-v1[1]*R[3][j]
+    else/* is(i=3) */
+      v1[1]*R[2][j]-v1[2]*R[1][j]
+  ) else /* is(i > 3) */ ( /* translation / rotation */
+    i : i - 3,
+    if     is(j=1) then 
+      v2[2]*R[i][3]-v2[3]*R[i][2]
+    elseif is(j=2) then
+      v2[3]*R[i][1]-v2[1]*R[i][3]
+    else/* is(j=3) */
+      v2[1]*R[i][2]-v2[2]*R[i][1]
+  )
+)$
+
+/* Find matrix Mjj */
+GetJJ(Jj) := block(
+  [ n : length(Jj), M ],
+  M : zeromatrix(n,n), 
+  for i : 1 thru n do (
+    for j : 1 thru n do 
+      M[i][j] : if is(i > j) then M[j][i] else (Jj[i] . Jj[j])^2 ),
+  M 
+)$
+
+/* Find matrix Mjl */
+GetJL(Jj,Jl) := block(
+  [ n : length(Jj), M,
+    pos, tmp, prow ],
+  M : zeromatrix(n,21*n),   /* assume symmetric k matrix, then 21 parameters at max */
+  /* for each link */
+  for k : 0 thru (n-1) do (
+    /* for each joint */
+    for p : 1 thru n do (
+      /* find influence */
+      tmp : zeromatrix(6,6),
+      for i : 1 thru 6 do (
+        prow : Jj[p] . Jl[k*6+i],
+        for j : 1 thru 6 do 
+          tmp[i][j] : if is(i > j) then tmp[j][i] else prow * (Jj[p] . Jl[k*6+j])
+      ),
+      /* save, assume the stiffness matrix is symmetric */
+      pos : k * 21 + 1,
+      for i : 1 thru 6 do (
+        for j : 1 thru 6 do (
+          if is(i<=j) then (
+            M[p][pos] : if is(i=j) then tmp[i][j] else 2*tmp[i][j],
+            pos : pos + 1
+          )
+        )
+      )
+    )
+  ),
+  M 
+)$
+
+/* Integrate matrix */ 
+/* vars have form [[name1,low1,up1],[name2,low2,up2]...] */
+IntegrateMat(M,vars) := block (
+  [ v ],
+  if emptyp(vars) then 
+    M
+  else (
+    v : first(vars),
+    keepfloat : true, /* don't simplify to ratios */
+    IntegrateMat(defint(M,v[1],v[2],v[3]), rest(vars))
+  )
+)$
+
+/* Stiffness matrix for a beam (in X direction) */
+Kbeam(L,a,b,tp) := block(
+  [ E: 7E10, nu: 0.346, rho: 2699,    /* assume alluminium */
+    S, Iy, Iz, J, G],
+  /* parameters */
+  if is(tp="circ") then (
+    S : %pi*(a^2-b^2)/4, 
+    Iy : %pi*(a^4-b^4)/64
+  ) else /* is(tp="rect") */ (
+    S : a^2 - b^2,
+    Iy : (a^4 - b^4)/12
+  ),
+  Iz : Iy, J : Iy + Iz, G : E / (2*(1+nu)),
+  /* stiffness matrix */
+  (E / L^2) * matrix(
+    [S*L,       0,       0,       0,      0,      0],
+    [  0, 12*Iz/L,       0,       0,      0,  -6*Iz],
+    [  0,       0, 12*Iy/L,       0,   6*Iy,      0],
+    [  0,       0,       0, G*J*L/E,      0,      0],
+    [  0,       0,    6*Iy,       0, 4*Iy*L,      0],
+    [  0,   -6*Iz,       0,       0,      0, 4*Iz*L]
+  )      
+)$
+
+/* Rotate if beam is not in X direction */
+Krot(K,R) := block(
+  [ M, m0 : zeromatrix(3,3) ],
+  R : submatrix(4,R,4),
+  M : addrow(addcol(R, m0), 
+             addcol(m0, R)),
+  transpose(M) . K . M
+)$
+
+/* To block-diagonal matrix */
+Diag(lst) := block(
+  [ M : matrix(), r0, r, elt ],
+  for v in lst do (
+    r0 : length(M),    
+    if matrixp(v) then (
+      elt : v,
+      r   : length(v)
+    ) else (
+      elt : [v],
+      r   : 1
+    ),
+    if is(r0 > 0) then (
+      M : addrow(addcol(M,   zeromatrix(r0,r)),
+                 addcol(zeromatrix(r,r0), elt))
+    ) else 
+      M : addcol(M, elt)
+  ),
+  M
+)$
+
+/* Upper part to vector */
+Vec66(m) := block(
+  [ v : [] ],
+  for i : 1 thru 6 do (
+    for j : i thru 6 do 
+      v : endcons(m[i][j], v)
+  ),
+  transpose(v) 
+)$
+
+/* Get random state list */
+RandState(lst) := block(
+  [ res : [] ],
+  for v in lst do
+    res : endcons(float(v[2])+random(float(v[3]-v[2])), res),
+  res 
+)$
+
+/* Random force with the given magnitude */
+RandForce(w) := block(
+  [ v : [random(1.0), random(1.0), random(1.0)] ],
+  (w / sqrt(v . v)) * transpose(v)
+)$
