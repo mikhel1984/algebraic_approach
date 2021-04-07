@@ -65,7 +65,7 @@ delta : Mcomp . addrow(Vec66(klst[1]), Vec66(klst[2]), Vec66(klst[3]))$
 k_alg : float(transpose([klst[4],klst[5],klst[6]]) + delta)$ 
 1 / k_alg;
 
-
+/*
 disp("Second method")$
 disp("Find b's")$
 ps : GetStates(rbt, [q1,q2,q3])$ 
@@ -83,6 +83,7 @@ disp("Compliance (2n algebraic)")$
 delta : Mcomp . addrow(Vec66(klst[1]), Vec66(klst[2]), Vec66(klst[3]))$ 
 k_alg : float(transpose([klst[4],klst[5],klst[6]]) + delta)$ 
 1 / k_alg;
+*/
 
 /******** Experimetal approach **********/
 /* update range */

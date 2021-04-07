@@ -135,9 +135,7 @@ FindJMat(lst,ps) := block(
   for p in ps do (
     /* find real joint */
     if p[6] then (
-      acc : [],
-      for u in ps do 
-        acc : endcons(expand(JacProd(u,p,lst)), acc),
+      acc : makelist(expand(JacProd(u,p,lst)), u, ps),
       M : endcons(acc, M)
     )
   ),
@@ -316,7 +314,7 @@ Krot(K,R) := block(
 Diag(lst) := block(
   [ M : matrix(), r0, r, elt ],
   for v in lst do (
-    r0 : length(M),    
+    r0 : length(M),
     if matrixp(v) then (
       elt : v,
       r   : length(v)
@@ -344,12 +342,7 @@ Vec66(m) := block(
 )$
 
 /* Get random state list */
-RandState(lst) := block(
-  [ res : [] ],
-  for v in lst do
-    res : endcons(float(v[2])+random(float(v[3]-v[2])), res),
-  res 
-)$
+RandState(lst) := makelist(float(v[2])+random(float(v[3]-v[2])), v, lst)$
 
 /* Random force with the given magnitude */
 RandForce(w) := block(
