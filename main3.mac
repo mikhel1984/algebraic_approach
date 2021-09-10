@@ -43,6 +43,7 @@ w : 100$
 /******** Algebraic approach ********/
 
 /****** 1st version ********/
+elapsed_run_time();
 disp("First method")$
 disp("Find JJ and JL")$
 JJ : GetJJ(Jacj)$ 
@@ -86,16 +87,17 @@ k_alg : float(transpose([klst[4],klst[5],klst[6]]) + delta)$
 */
 
 /******** Experimetal approach **********/
+elapsed_run_time();
 /* update range */
 rng : cons([q1,-%pi,%pi], rng)$
 /* number of experiments */ 
-N : 100$  
+Nexp : 50$  
 /* accumulators */
 S1 : 0$  S2 : 0$ 
 
 /* run */
 disp("Experimetal approach")$
-for i : 1 thru N do (
+for i : 1 thru Nexp do (
   /* random configuration and force */
   J : apply(Jfull, RandState(rng)),
   W : RandForce(w),  
@@ -114,10 +116,10 @@ for i : 1 thru N do (
 disp("Compliance (experimental)")$
 k_exp : invert(S1) . S2$
 1 / k_exp;
-
+elapsed_run_time();
 /********* Error estimation *******/
 
-N : 30$
+N : 500$
 e_expl : []$  e_algl : []$ 
 /* to diagonal matrices */
 kk_alg : Diag(transpose(k_alg)[1])$
